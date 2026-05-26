@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  assistant-api:
+    build: .
+    container_name: coding-assistant-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/app/chroma_db
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
+    driver: local
