@@ -76,8 +76,8 @@ This guarantees the ingestion tool behaves like a production-grade system and re
 Using `uv` (modern, ultra-fast Python package manager) is recommended:
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/autonomous-coding-assist.git
-cd autonomous-coding-assist
+git clone https://github.com/your-username/ai-code-assistant-agent.git
+cd ai-code-assistant-agent
 
 # Install dependencies into virtual environment
 uv venv
