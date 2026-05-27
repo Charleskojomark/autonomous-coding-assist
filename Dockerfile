@@ -17,7 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Copy dependencies definitions
-COPY pyproject.toml .
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
 
 # Install dependencies using uv to a virtual environment
 RUN uv venv /opt/venv

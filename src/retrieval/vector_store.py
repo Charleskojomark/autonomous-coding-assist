@@ -3,7 +3,6 @@ import logging
 from typing import List, Optional
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
 
 from src.models.schemas import CodeChunk
 
@@ -13,19 +12,165 @@ class CodeVectorStore:
     def __init__(
         self, 
         persist_directory: Optional[str] = None,
-        model_name: str = "all-MiniLM-L6-v2"
+        model_name: Optional[str] = None,
+        embedding_provider: Optional[str] = None
     ):
-        self.persist_directory = persist_directory or os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
-        os.makedirs(self.persist_directory, exist_ok=True)
+        self.embedding_provider = embedding_provider or os.getenv("EMBEDDING_PROVIDER", "local")
         
-        logger.info(f"Initializing ChromaDB client in {self.persist_directory}")
-        self.client = chromadb.PersistentClient(
-            path=self.persist_directory,
-            settings=Settings(anonymized_telemetry=False)
-        )
+        # Determine default model name based on provider
+        if not model_name:
+            if self.embedding_provider == "local":
+                self.model_name = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+            elif self.embedding_provider == "openai":
+                self.model_name = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+            elif self.embedding_provider == "cohere":
+                self.model_name = os.getenv("EMBEDDING_MODEL", "embed-english-v3.0")
+            elif self.embedding_provider == "huggingface":
+                self.model_name = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+            else:
+                self.model_name = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+        else:
+            self.model_name = model_name
+
+        self.embedding_model = None
+        if self.embedding_provider == "local":
+            logger.info(f"Loading local sentence transformer embedding model: {self.model_name}")
+            from sentence_transformers import SentenceTransformer
+            self.embedding_model = SentenceTransformer(self.model_name)
+        else:
+            logger.info(f"Using remote embedding provider '{self.embedding_provider}' with model: {self.model_name}")
+
+        chroma_tenant = os.getenv("CHROMA_TENANT")
+        chroma_host = os.getenv("CHROMA_HOST")
         
-        logger.info(f"Loading sentence transformer embedding model: {model_name}")
-        self.embedding_model = SentenceTransformer(model_name)
+        if chroma_tenant:
+            chroma_api_key = os.getenv("CHROMA_API_KEY")
+            chroma_database = os.getenv("CHROMA_DATABASE", "default")
+            logger.info(f"Initializing managed Chroma Cloud client (Tenant: {chroma_tenant}, Database: {chroma_database})")
+            self.client = chromadb.CloudClient(
+                api_key=chroma_api_key,
+                tenant=chroma_tenant,
+                database=chroma_database
+            )
+        elif chroma_host:
+            chroma_port = os.getenv("CHROMA_PORT", "8000")
+            chroma_ssl = os.getenv("CHROMA_SSL", "false").lower() == "true"
+            chroma_token = os.getenv("CHROMA_API_KEY") or os.getenv("CHROMA_AUTH_TOKEN")
+            
+            logger.info(f"Initializing remote ChromaDB client at {chroma_host}:{chroma_port} (SSL: {chroma_ssl})")
+            
+            headers = {}
+            settings_kwargs = {"anonymized_telemetry": False}
+            if chroma_token:
+                headers["Authorization"] = f"Bearer {chroma_token}"
+                headers["X-Chroma-Token"] = chroma_token
+                settings_kwargs["chroma_client_auth_provider"] = "chromadb.auth.token.TokenAuthClientProvider"
+                settings_kwargs["chroma_client_auth_credentials"] = chroma_token
+                
+            self.client = chromadb.HttpClient(
+                host=chroma_host,
+                port=chroma_port,
+                ssl=chroma_ssl,
+                headers=headers,
+                settings=Settings(**settings_kwargs)
+            )
+        else:
+            self.persist_directory = persist_directory or os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
+            os.makedirs(self.persist_directory, exist_ok=True)
+            logger.info(f"Initializing local ChromaDB client in {self.persist_directory}")
+            self.client = chromadb.PersistentClient(
+                path=self.persist_directory,
+                settings=Settings(anonymized_telemetry=False)
+            )
+
+    def _embed_documents(self, documents: List[str], input_type: str = "search_document") -> List[List[float]]:
+        if not documents:
+            return []
+            
+        provider = self.embedding_provider.lower()
+        if provider == "local":
+            if not self.embedding_model:
+                from sentence_transformers import SentenceTransformer
+                self.embedding_model = SentenceTransformer(self.model_name)
+            chunk_embeddings = self.embedding_model.encode(documents, show_progress_bar=False)
+            return [emb.tolist() for emb in chunk_embeddings]
+            
+        elif provider == "openai":
+            import httpx
+            openai_api_key = os.getenv("OPENAI_API_KEY")
+            if not openai_api_key:
+                raise ValueError("OPENAI_API_KEY environment variable is required when using the 'openai' embedding provider.")
+            
+            headers = {
+                "Authorization": f"Bearer {openai_api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "input": documents,
+                "model": self.model_name
+            }
+            response = httpx.post(
+                "https://api.openai.com/v1/embeddings",
+                headers=headers,
+                json=payload,
+                timeout=60.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            return [item["embedding"] for item in data["data"]]
+            
+        elif provider == "cohere":
+            import httpx
+            cohere_api_key = os.getenv("COHERE_API_KEY")
+            if not cohere_api_key:
+                raise ValueError("COHERE_API_KEY environment variable is required when using the 'cohere' embedding provider.")
+            
+            headers = {
+                "Authorization": f"Bearer {cohere_api_key}",
+                "Content-Type": "application/json"
+            }
+            cohere_input_type = "search_document" if input_type == "search_document" else "search_query"
+            payload = {
+                "texts": documents,
+                "model": self.model_name,
+                "input_type": cohere_input_type
+            }
+            response = httpx.post(
+                "https://api.cohere.ai/v1/embed",
+                headers=headers,
+                json=payload,
+                timeout=60.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            embeddings = data.get("embeddings")
+            if isinstance(embeddings, dict):
+                return embeddings.get("float", [])
+            return embeddings
+            
+        elif provider == "huggingface":
+            import httpx
+            hf_api_key = os.getenv("HF_API_KEY")
+            headers = {}
+            if hf_api_key:
+                headers["Authorization"] = f"Bearer {hf_api_key}"
+            
+            response = httpx.post(
+                f"https://api-inference.huggingface.co/pipeline/feature-extraction/{self.model_name}",
+                headers=headers,
+                json={"inputs": documents},
+                timeout=60.0
+            )
+            response.raise_for_status()
+            embeddings = response.json()
+            if isinstance(embeddings, list) and len(embeddings) > 0:
+                if isinstance(embeddings[0], float):
+                    return [embeddings]
+                return embeddings
+            raise ValueError(f"Unexpected response structure from Hugging Face Inference API: {embeddings}")
+            
+        else:
+            raise ValueError(f"Unknown embedding provider: {self.embedding_provider}")
 
     def _get_collection(self, repo_name: str):
         # Format repo_name to be a valid collection name (replace / and other symbols)
@@ -71,9 +216,7 @@ class CodeVectorStore:
             metadatas.append(metadata)
             
         logger.info(f"Embedding {len(documents)} chunks...")
-        # Local batch embedding
-        chunk_embeddings = self.embedding_model.encode(documents, show_progress_bar=False)
-        embeddings = [emb.tolist() for emb in chunk_embeddings]
+        embeddings = self._embed_documents(documents, input_type="search_document")
         
         logger.info(f"Adding chunks to Chroma collection for {repo_name}...")
         collection.add(
@@ -94,10 +237,11 @@ class CodeVectorStore:
             return []
             
         # Encode the query
-        query_embedding = self.embedding_model.encode(query).tolist()
+        query_embedding = self._embed_documents([query], input_type="search_query")[0]
         
         # Search
         results = collection.query(
+
             query_embeddings=[query_embedding],
             n_results=top_k
         )
