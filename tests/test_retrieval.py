@@ -7,10 +7,12 @@ from src.retrieval.vector_store import CodeVectorStore
 
 @pytest.fixture
 def temp_vector_store():
-    # Use temporary directory for testing persistent ChromaDB
+    # Use temporary directory for testing persistent ChromaDB and force local embedding
+    from unittest.mock import patch
     temp_dir = tempfile.mkdtemp()
-    store = CodeVectorStore(persist_directory=temp_dir, model_name="all-MiniLM-L6-v2")
-    yield store
+    with patch.dict(os.environ, {"EMBEDDING_PROVIDER": "local"}):
+        store = CodeVectorStore(persist_directory=temp_dir, model_name="all-MiniLM-L6-v2")
+        yield store
     # Cleanup
     shutil.rmtree(temp_dir)
 

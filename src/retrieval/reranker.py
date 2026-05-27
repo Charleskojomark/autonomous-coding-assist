@@ -99,7 +99,7 @@ class CrossEncoderReranker:
             payload = [{"text": query, "text_pair": chunk.content} for chunk in chunks]
             
             response = httpx.post(
-                f"https://api-inference.huggingface.co/models/{self.model_name}",
+                f"https://router.huggingface.co/hf-inference/models/{self.model_name}",
                 headers=headers,
                 json=payload,
                 timeout=60.0

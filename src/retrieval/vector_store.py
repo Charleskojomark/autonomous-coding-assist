@@ -156,7 +156,7 @@ class CodeVectorStore:
                 headers["Authorization"] = f"Bearer {hf_api_key}"
             
             response = httpx.post(
-                f"https://api-inference.huggingface.co/pipeline/feature-extraction/{self.model_name}",
+                f"https://router.huggingface.co/hf-inference/models/{self.model_name}/pipeline/feature-extraction",
                 headers=headers,
                 json={"inputs": documents},
                 timeout=60.0

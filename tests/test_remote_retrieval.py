@@ -12,6 +12,8 @@ def test_chroma_remote_client_init():
             "CHROMA_PORT": "8080",
             "CHROMA_SSL": "true",
             "CHROMA_AUTH_TOKEN": "my-secret-token",
+            "CHROMA_API_KEY": "",
+            "CHROMA_TENANT": "",
             "EMBEDDING_PROVIDER": "openai"
         }
         with patch.dict(os.environ, env):
@@ -100,7 +102,7 @@ def test_hf_embedding_provider():
                 assert embeddings == [[0.7, 0.8, 0.9]]
                 mock_post.assert_called_once()
                 args, kwargs = mock_post.call_args
-                assert args[0] == "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+                assert args[0] == "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
                 assert kwargs["headers"]["Authorization"] == "Bearer hf-test"
 
 def test_cohere_reranker():
